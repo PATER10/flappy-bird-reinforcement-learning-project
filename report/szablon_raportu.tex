@@ -1,0 +1,262 @@
+\documentclass[12pt]{article}
+\input{article_style.tex}
+
+\title{Raport projektowy\\Uczenie się ze wzmocnieniem}
+\author{Patryk Kubik}
+\date{2026/2027}
+
+\begin{document}
+\maketitle
+\tableofcontents
+\newpage
+
+\section{Informacje podstawowe}
+
+\begin{center}
+\begin{tabular}{p{0.34\textwidth}p{0.56\textwidth}}
+\toprule
+Element & Informacja \\
+\midrule
+Imię i nazwisko & Patryk Kubik \\
+Numer albumu & 179538 \\
+Kierunek/specjalność & Informatyka/Sztuczna Inteligencja \\
+Tytuł projektu & Zastosowanie uczenia ze wzmocnieniem w grze typu Flappy Bird \\
+Link do repozytorium & \url{https://github.com/PATER10/flappy-bird-reinforcement-learning-project} \\
+Data oddania & Do uzupełnienia \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\section{Temat i cel projektu}
+
+\subsection{Opis problemu}
+
+Projekt polega na rozwiązaniu problemu nieskończonego horyzontu (survivalowego) w dynamicznym środowisku przewijanym bocznie (2D). Agent sterujący obiektem (ptakiem) musi poruszać się w przestrzeni, podlegając wirtualnej grawitacji, i unikać kolizji z pojawiającymi się na jego drodze przeszkodami (rurami). Zderzenie z dowolną przeszkodą lub podłożem kończy próbę.
+
+\subsection{Cel agenta}
+
+Celem agenta jest maksymalizacja skumulowanej nagrody, co przekłada się na przetrwanie jak najdłużej bez kolizji z przeszkodami i zdobycie jak najwyższego wyniku punktowego. Działanie agenta uznaje się za skuteczne, gdy potrafi on w pełni autonomicznie, bez interwencji człowieka, omijać przeszkody i utrzymywać się w wyznaczonych granicach środowiska przez określoną z góry liczbę wygenerowanych rur, zapobiegając szybkiemu zakończeniu epizodu.
+
+\subsection{Uzasadnienie zastosowania uczenia się ze wzmocnieniem}
+
+Problem gry Flappy Bird stanowi klasyczny przykład procesu decyzyjnego, w którym uczenie się ze wzmocnieniem (RL) ma ogromne zastosowanie, ponieważ:
+\begin{itemize}
+    \item agent musi sekwencyjnie i w czasie rzeczywistym podejmować decyzję o wykonaniu skoku lub powstrzymaniu się od niego na podstawie zmieniających się współrzędnych przeszkód,
+    \item każda decyzja (np. skok) bezpośrednio wpływa na przyszły stan środowiska -- zbyt wczesny lub zbyt późny skok może doprowadzić do nieuchronnej kolizji w kolejnych klatkach symulacji,
+    \item istotny jest wynik długoterminowy, a nie natychmiastowa nagroda -- pojedynczy skok może nie przynieść od razu punktu (nagrody), ale jest niezbędny do uniknięcia uderzenia w rurę oddaloną o kilkadziesiąt pikseli,
+    \item problem ten cechuje się bardzo dużą, ciągłą przestrzenią stanów. Zastosowanie agenta uczącego się (w szczególności metod Deep RL) jest uzasadnione, ponieważ agent jest w stanie sam wywnioskować optymalną politykę sterowania, bez konieczności ręcznego programowania reguł ,,jeżeli ptak jest $x$ centymetrów od rury, to skacz'', które byłyby nieskuteczne.
+\end{itemize}
+
+\section{Formalizacja problemu RL/MDP}
+
+\subsection{Agent i środowisko}
+
+Agentem w tym problemie jest model algorytmiczny (oparty na głębokiej sieci neuronowej), który odpowiada za sterowanie ptakiem. Środowiskiem jest fizyczny silnik gry stworzony w Unity, który zarządza grawitacją, ruchem obiektu i generowaniem przeszkód. W jednym kroku epizodu:
+\begin{enumerate}
+    \item Środowisko mierzy aktualne współrzędne ptaka i rur, po czym przesyła te dane (stan) do agenta poprzez interfejs API.
+    \item Agent na podstawie otrzymanych danych liczbowych podejmuje decyzję o akcji.
+    \item Agent wysyła akcję z powrotem do środowiska.
+    \item Środowisko (Unity) wykonuje ruch, sprawdza kolizje i wylicza nagrodę, po czym cały proces się powtarza dla nowej klatki animacji.
+\end{enumerate}
+
+\subsection{Stan lub obserwacja}
+
+W tym przypadku agent otrzymuje obserwację, która bardzo dokładnie odwzorowuje rzeczywisty stan środowiska ważny do podjęcia decyzji.
+
+\begin{center}
+\begin{tabular}{p{0.30\textwidth}p{0.60\textwidth}}
+\toprule
+Składowa stanu/obserwacji & Znaczenie \\
+\midrule
+\texttt{bird\_y} & Współrzędna Y położenia ptaka na ekranie. \\
+\texttt{bird\_velocity} & Aktualna prędkość opadania lub wznoszenia ptaka. \\
+\texttt{pipe\_dist\_x} & Odległość w poziomie do najbliższej nadciągającej rury. \\
+\texttt{pipe\_gap\_y} & Współrzędna Y środka wolnej przestrzeni (szczeliny) pomiędzy dolną a górną rurą. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Akcje}
+
+Zbiór akcji dostępnych dla agenta jest dyskretny i bardzo mały. W każdym kroku decyzyjnym agent ma do dyspozycji jedną z dwóch akcji. Żadna z nich nie jest zablokowana w zależności od stanu.
+
+\begin{center}
+\begin{tabular}{p{0.30\textwidth}p{0.60\textwidth}}
+\toprule
+Akcja & Opis \\
+\midrule
+\texttt{0} (Brak akcji) & Ptak nie podejmuje żadnego działania, opadając swobodnie pod wpływem grawitacji. \\
+\texttt{1} (Skok) & Agent uruchamia impuls siły działający na ptaka pionowo w górę, nadając mu natychmiastową prędkość wznoszenia. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Funkcja nagrody}
+
+Funkcja nagrody została zaprojektowana w taki sposób, aby promować przetrwanie i unikanie przeszkód. 
+
+\begin{equation}
+    r_t = \begin{cases} 
+    -100 & \text{za kolizję (rura, ziemia, wyjście poza ekran),} \\
+    +10 & \text{za pomyślny przelot przez szczelinę pomiędzy rurami,} \\
+    +0.1 & \text{za każdy przeżyty krok (brak kolizji i brak przelotu).}
+    \end{cases}
+\end{equation}
+
+W tej sekcji wyjaśniono:
+\begin{itemize}
+    \item \textbf{za co agent otrzymuje nagrodę dodatnią:} Agent otrzymuje dużą nagrodę dodatnią (+10) za bezpieczne pokonanie przeszkody (przekroczenie współrzędnej X rury). Otrzymuje również bardzo małą nagrodę (+0.1) ułamkową za samo utrzymanie się przy życiu w każdej klatce symulacji.
+    \item \textbf{za co agent otrzymuje karę:} Agent otrzymuje dotkliwą karę (-100) za zderzenie z rurą, uderzenie w podłoże, a także za wylecenie poza górną krawędź ekranu.
+    \item \textbf{czy występuje kara za krok:} W klasycznym ujęciu, gdzie celem jest jak najszybsze dotarcie do mety, stosuje się ujemną karę za krok. Ponieważ w grze Flappy Bird celem jest przetrwanie (nieskończony horyzont), zamiast ujemnej kary za krok zastosowano minimalną nagrodę dodatnią za krok, zachęcającą agenta do unikania stanów terminalnych.
+    \item \textbf{czy występują ograniczenia twarde lub miękkie:} Ograniczenia twarde stanowią fizyczne kolidery środowiska -- obiekty rur oraz podłoże. Ich naruszenie jest niedozwolone i natychmiast kończy epizod porażką.
+    \item \textbf{czy nagroda nie zachęca agenta do niepożądanego zachowania:} Funkcja nagrody uwzględnia karę za opuszczenie obszaru gry od góry (wylecenie poza ekran). Zapobiega to niepożądanemu zachowaniu, polegającemu na ciągłym skakaniu, aby przelecieć bezpiecznie wysoko nad rurami, omijając w ten sposób przeszkody.
+\end{itemize}
+
+\subsection{Warunki zakończenia epizodu}
+
+Epizod (jedna próba przejścia gry) ulega natychmiastowemu zakończeniu po wejściu środowiska w stan terminalny. Następuje to w przypadku spełnienia co najmniej jednego z poniższych warunków:
+\begin{itemize}
+    \item \textbf{Kolizja z przeszkodą:} Punkt kolizyjny ptaka wejdzie w interakcję z prostokątem kolizyjnym dolnej lub górnej rury.
+    \item \textbf{Kolizja z podłożem:} Ptak opadnie na poziom ziemi.
+    \item \textbf{Opuszczenie obszaru gry:} Ptak wyleci poza górną krawędź ekranu (zabezpieczenie przed omijaniem rur górą).
+    \item \textbf{Osiągnięcie celu (limit rur):} Agent z powodzeniem pokona 100 rur bez kolizji. Jest to sztuczny warunek zakończenia wprowadzony w celu uniknięcia nieskończonych epizodów w przypadku wyuczenia się przez agenta optymalnej polityki sterowania.
+\end{itemize}
+
+\subsection{Założenia i ograniczenia środowiska}
+
+W ramach projektu przyjęto następujące założenia i uproszczenia modelu środowiska:
+\begin{itemize}
+    \item \textbf{Reprezentacja stanu:} Zrezygnowano z analizy obrazu (pikseli) na rzecz bezpośredniego przekazywania dokładnych współrzędnych przestrzennych. Agent ,,nie widzi'' gry, lecz analizuje wektor liczb. Znacząco zmniejsza to złożoność obliczeniową i pozwala na wykorzystanie prostszej architektury sieci.
+    \item \textbf{Uproszczona fizyka:} Model fizyczny środowiska uwzględnia jedynie stałą siłę grawitacji (działającą wzdłuż osi Y) oraz skokowe impulsy siły (akcja skoku). Pominęto efekty aerodynamiczne, takie jak opór powietrza, rotację obiektu czy zmienny wiatr.
+    \item \textbf{Komunikacja przez API:} Ponieważ agent (Python) i środowisko (Unity) komunikują się przez zewnętrzny interfejs, pomija się kwestię mikrosekundowych opóźnień sieciowych (tzw. lagów). Zakłada się, że przy symulacji uruchomionej w przyspieszonym czasie wymiana pakietów stanu i akcji zachodzi w sposób w pełni synchroniczny z klatkami fizyki.
+\end{itemize}
+
+\section{Implementacja}
+
+\subsection{Struktura repozytorium}
+
+Należy krótko opisać strukturę repozytorium i najważniejsze pliki projektu.
+
+\begin{verbatim}
+repozytorium/
+|-- src/
+|-- experiments/
+|-- report/
+|-- results/
+`-- README.md
+\end{verbatim}
+
+\subsection{Środowisko}
+
+Należy opisać sposób implementacji środowiska, w szczególności funkcje inicjalizacji epizodu oraz wykonania kroku środowiska.
+
+\subsection{Agent bazowy}
+
+Należy opisać agenta losowego, heurystycznego albo inny baseline wykorzystany do porównania z agentem uczącym się.
+
+\subsection{Agent uczący się}
+
+Należy opisać zastosowany algorytm RL lub DRL, jego parametry oraz sposób implementacji. W przypadku Q-tab należy opisać reprezentację tablicy wartości. W przypadku DRL należy opisać wejścia modelu, wyjścia modelu, architekturę oraz sposób uczenia.
+
+\section{Plan eksperymentów}
+
+Należy opisać eksperymenty zaplanowane w celu oceny działania agenta.
+
+\begin{center}
+\begin{tabular}{p{0.24\textwidth}p{0.30\textwidth}p{0.30\textwidth}}
+\toprule
+Eksperyment & Co jest zmieniane? & Co jest mierzone? \\
+\midrule
+E1 & Do uzupełnienia & Do uzupełnienia \\
+E2 & Do uzupełnienia & Do uzupełnienia \\
+E3 & Do uzupełnienia & Do uzupełnienia \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+W tej sekcji należy wskazać:
+\begin{itemize}
+    \item liczbę epizodów uczenia,
+    \item liczbę powtórzeń eksperymentu albo uzasadnienie braku powtórzeń,
+    \item parametry uczenia,
+    \item metryki oceny,
+    \item warianty środowiska, map lub funkcji nagrody,
+    \item sposób porównania z agentem bazowym.
+\end{itemize}
+
+\section{Wyniki}
+
+W tej sekcji należy przedstawić wyniki eksperymentów. Wyniki powinny być pokazane w postaci tabel, wykresów lub czytelnych zestawień.
+
+\begin{center}
+\begin{tabular}{p{0.28\textwidth}p{0.20\textwidth}p{0.20\textwidth}p{0.20\textwidth}}
+\toprule
+Wariant & Średni zwrot & Skuteczność & Długość epizodu \\
+\midrule
+Agent bazowy & Do uzupełnienia & Do uzupełnienia & Do uzupełnienia \\
+Agent RL/DRL & Do uzupełnienia & Do uzupełnienia & Do uzupełnienia \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{figure}[h]
+    \centering
+    \fbox{\parbox{0.82\textwidth}{\centering Miejsce na wykres procesu uczenia}}
+    \caption{Przykładowy wykres procesu uczenia agenta.}
+\end{figure}
+
+\section{Analiza i wnioski}
+
+Należy zinterpretować wyniki. W tej części należy odpowiedzieć m.in. na pytania:
+\begin{itemize}
+    \item Czy agent uczący się działa lepiej niż agent bazowy?
+    \item Jak zmieniało się zachowanie agenta w trakcie uczenia?
+    \item Które elementy środowiska były najtrudniejsze?
+    \item Czy funkcja nagrody prowadziła do oczekiwanego zachowania?
+    \item Czy wystąpiły przypadki niepożądanego zachowania agenta?
+    \item Jakie są najważniejsze ograniczenia rozwiązania?
+\end{itemize}
+
+\section{Instrukcja uruchomienia}
+
+Należy opisać sposób uruchomienia projektu od czystego repozytorium. Przykładowo:
+
+\begin{verbatim}
+git clone https://github.com/...
+cd nazwa-repozytorium
+python -m venv .venv
+.venv\Scripts\activate
+pip install -r requirements.txt
+python src/main.py
+\end{verbatim}
+
+Należy również wskazać, jak odtworzyć eksperymenty oraz gdzie zapisywane są wyniki.
+
+\section{Wsparcie AI}
+
+W tej sekcji należy obowiązkowo opisać wykorzystanie narzędzi sztucznej inteligencji. Jeżeli student nie korzystał z takich narzędzi, należy wpisać jednoznaczną informację, że nie korzystano ze wsparcia AI.
+
+\begin{center}
+\begin{tabular}{p{0.13\textwidth}p{0.19\textwidth}p{0.21\textwidth}p{0.27\textwidth}}
+\toprule
+Data & Narzędzie/model & Cel użycia & Transkrypt / link / zakres \\
+\midrule
+26/10/2026 - 05/11/2026 & Gemini 3.1 PRO & Konsultacja w celu wybrania tematu projektu, pomoc w pisaniu 3 pierwszych rozdziałów raportu & https://share.gemini.google/KI2bDKycjaVm / Wszystkie treści zostały dogłębnie przeanalizowane i dostosowane do wymagań, zgodne opisy zostały ujęte w raporcie \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Należy zapisać transkrypty rozmów z modelami AI wraz z datą oraz nazwą modelu. Jeżeli rozmowa odbywała się poza narzędziami programistycznymi, należy dodatkowo udostępnić całą rozmowę poprzez link, o ile użyte narzędzie umożliwia takie udostępnienie.
+
+Student powinien także wyjaśnić, które elementy wygenerowane lub zasugerowane przez AI zostały samodzielnie sprawdzone, zmodyfikowane albo odrzucone.
+
+\section{Literatura}
+
+W tej sekcji należy wskazać wykorzystane źródła: książki, artykuły naukowe, dokumentację bibliotek, materiały wykładowe oraz inne źródła użyte podczas pracy nad projektem.
+
+\begin{thebibliography}{9}
+\bibitem{sutton_barto}
+R. S. Sutton, A. G. Barto, \textit{Reinforcement Learning: An Introduction}, 2nd ed., MIT Press, 2018.
+\end{thebibliography}
+
+\end{document}
